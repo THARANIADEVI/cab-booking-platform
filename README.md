@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Cably cab booking platform
 
 Cably is a full-stack ride booking MVP built from `_Python - Cab Booking Platform.pdf`.
@@ -74,3 +75,6 @@ To run the optional receipt worker on Windows, open another PowerShell window, a
 ```powershell
 celery -A app.tasks.celery_app worker --loglevel=info --pool=solo
 ```
+=======
+# cab-booking-platform
+>>>>>>> e43ace105e9d52a27edb86b722a6f7c9fc221fa0
