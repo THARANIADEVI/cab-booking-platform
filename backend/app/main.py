@@ -2,7 +2,7 @@ import asyncio, json, math, os, time, uuid
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from typing import Literal
-from urllib.request import urlopen
+from urllib.request import Request as URLRequest, urlopen
 
 import stripe
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
@@ -224,6 +224,22 @@ def fare(payload: EstimateIn):
     db.close()
     return {"distance_meters":int(distance),"duration_secs":duration,"fare_cents":cents,"currency":"usd","fare":round(cents/100,2),"estimate_source":estimate_source,"promo_applied":bool(promo and promo.active)}
 
+def route_coordinates(payload: EstimateIn):
+    """Fetch a real driving route from OSRM; never fabricate a path."""
+    url=(
+        "https://router.project-osrm.org/route/v1/driving/"
+        f"{payload.pickup_lng},{payload.pickup_lat};{payload.drop_lng},{payload.drop_lat}"
+        "?overview=full&geometries=geojson"
+    )
+    try:
+        request=URLRequest(url,headers={"User-Agent":"Cably/1.0 (ride route estimate)"})
+        with urlopen(request,timeout=8) as response:
+            result=json.loads(response.read().decode("utf-8"))
+        coordinates=result["routes"][0]["geometry"]["coordinates"]
+        return [[float(lat),float(lng)] for lng,lat in coordinates]
+    except Exception:
+        return []
+
 def serialize_ride(ride: Ride, db: Session):
     driver=db.get(User,ride.driver_id) if ride.driver_id else None
     vehicle=db.get(Driver,ride.driver_id) if ride.driver_id else None
@@ -241,12 +257,29 @@ def me(user: User=Depends(current_user), db: Session=Depends(get_db)):
     driver=db.get(Driver,user.id)
     return {"id":user.id,"name":user.name,"email":user.email,"phone":user.phone,"role":user.role,"rating_avg":user.rating_avg,"wallet_cents":user.wallet_cents,"driver":({"vehicle_info":driver.vehicle_info,"verified":driver.verified,"status":driver.status} if driver else None)}
 @app.get("/api/locations/geocode")
-def geocode_location(q: str=Query(min_length=3,max_length=240),user: User=Depends(current_user)):
+def geocode_location(q: str=Query(min_length=3,max_length=240),suggest: bool=False,place_id: str | None=None,user: User=Depends(current_user)):
     maps_key=os.getenv("GOOGLE_MAPS_API_KEY","")
-    if not maps_key: raise HTTPException(503,"Add GOOGLE_MAPS_API_KEY to search addresses outside the suggested locations")
+    if not maps_key: raise HTTPException(503,"Address search and reverse geocoding require GOOGLE_MAPS_API_KEY")
     try:
         import googlemaps
-        results=googlemaps.Client(key=maps_key).geocode(q)
+        client=googlemaps.Client(key=maps_key)
+        if suggest:
+            predictions=client.places_autocomplete(q)
+            return {"suggestions":[{"address":item["description"],"place_id":item["place_id"]} for item in predictions]}
+        coordinate_parts=q.split(",")
+        reverse_point=None
+        if len(coordinate_parts)==2:
+            try:
+                lat,lng=(float(part.strip()) for part in coordinate_parts)
+                if -90<=lat<=90 and -180<=lng<=180: reverse_point=(lat,lng)
+            except ValueError:
+                pass
+        if place_id:
+            results=client.geocode(place_id=place_id)
+        elif reverse_point:
+            results=client.reverse_geocode(reverse_point)
+        else:
+            results=client.geocode(q)
     except Exception as exc: raise HTTPException(502,f"Address lookup failed: {exc}")
     if not results: raise HTTPException(404,"We could not find that address. Try a nearby landmark.")
     result=results[0]
@@ -255,7 +288,8 @@ def geocode_location(q: str=Query(min_length=3,max_length=240),user: User=Depend
 def estimate(pickup: str, dropoff: str, pickup_lat: float, pickup_lng: float, drop_lat: float, drop_lng: float, promo_code: str | None=None,user: User=Depends(current_user)):
     return fare(EstimateIn(pickup=pickup,dropoff=dropoff,pickup_lat=pickup_lat,pickup_lng=pickup_lng,drop_lat=drop_lat,drop_lng=drop_lng,promo_code=promo_code))
 @app.post("/api/rides/estimate")
-def estimate_body(data: EstimateIn,user: User=Depends(current_user)): return fare(data)
+def estimate_body(data: EstimateIn,user: User=Depends(current_user)):
+    return {**fare(data),"route_coordinates":route_coordinates(data)}
 @app.post("/api/rides/request")
 async def request_ride(data: RideIn, db: Session=Depends(get_db), user: User=Depends(require_role("rider"))):
     existing=db.scalar(select(Ride).where(Ride.rider_id==user.id,Ride.status.in_(["requested","accepted","arrived","in_progress"])))
