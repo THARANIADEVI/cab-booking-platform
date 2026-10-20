@@ -23,6 +23,16 @@ from .models import Driver, Payment, Promo, Review, Ride, RideDecline, User, Wal
 from .receipts import build_receipt_pdf
 
 APP_ENV = os.getenv("APP_ENV", "development")
+# This environment may expose a dead local proxy (127.0.0.1:9). Keep Stripe
+# API requests direct when configured proxy variables point there.
+for proxy_name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+    proxy_value = os.getenv(proxy_name, "")
+    if "127.0.0.1:9" in proxy_value or "localhost:9" in proxy_value:
+        for no_proxy_name in ("NO_PROXY", "no_proxy"):
+            existing = [host.strip() for host in os.getenv(no_proxy_name, "").split(",") if host.strip()]
+            if "api.stripe.com" not in existing:
+                existing.append("api.stripe.com")
+            os.environ[no_proxy_name] = ",".join(existing)
 STRIPE_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 stripe.api_key = STRIPE_KEY
 app = FastAPI(title="Cably API", version="1.0.0", description="Ride booking, dispatch, payments and live trip updates")
@@ -39,11 +49,21 @@ if engine.dialect.name == "postgresql":
 
 def seed():
     with SessionLocal() as db:
+        # Seed parent users first. Keep each record independently idempotent so
+        # a partial seed from an earlier failed startup can be repaired safely.
         if not db.get(User, "demo-rider"):
-            db.add_all([User(id="demo-rider", name="Alex Morgan", email="alex@example.com", phone="+1 212 555 0142", role="rider", wallet_cents=2500), User(id="demo-driver", name="Jordan Lee", email="jordan@example.com", phone="+1 917 555 0198", role="driver")])
+            db.add(User(id="demo-rider", name="Alex Morgan", email="alex@example.com", phone="+1 212 555 0142", role="rider", wallet_cents=2500))
+        if not db.get(User, "demo-driver"):
+            db.add(User(id="demo-driver", name="Jordan Lee", email="jordan@example.com", phone="+1 917 555 0198", role="driver"))
+        db.commit()
+
+        if not db.get(Driver, "demo-driver"):
             db.add(Driver(user_id="demo-driver", vehicle_info="Tesla Model 3 · Black", verified=True, latitude=40.7211, longitude=-73.9981, status="active"))
-            db.add_all([Promo(code="WELCOME20", percent_off=20), Promo(code="CITY10", percent_off=10)])
-            db.commit()
+        if not db.get(Promo, "WELCOME20"):
+            db.add(Promo(code="WELCOME20", percent_off=20))
+        if not db.get(Promo, "CITY10"):
+            db.add(Promo(code="CITY10", percent_off=10))
+        db.commit()
 seed()
 
 class Hub:
