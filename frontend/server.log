@@ -1,0 +1,14 @@
+Next.js ready at http://localhost:3000
+ ○ Compiling / ...
+ ✓ Compiled / in 4s (1107 modules)
+ HEAD / 200 in 4585ms
+ GET / 200 in 179ms
+ GET / 200 in 97ms
+ ○ Compiling /_not-found ...
+ ✓ Compiled /_not-found in 940ms (1112 modules)
+ GET /sw.js 404 in 1432ms
+ GET / 200 in 79ms
+ HEAD / 200 in 109ms
+ GET / 200 in 184ms
+ GET /sw.js 404 in 75ms
+ GET /sw.js 404 in 88ms
